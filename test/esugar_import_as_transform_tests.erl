@@ -1,8 +1,9 @@
 -module(esugar_import_as_transform_tests).
 -compile([{parse_transform, esugar_import_as_transform}]).
 -include_lib("eunit/include/eunit.hrl").
--import_as({lists, [{seq/3, ls}]}).
--import_as([{lists, [{seq/2, ls}, {sum/1, sum}]}, {lists, [{reverse/1, rev}]}]).
+-import_as({lists, [{seq/2, ls}, {seq/3, ls}]}).
+-import_as({lists, [{sum/1, sum}]}).
+-import_as({lists, [{reverse/1, rev}]}).
 
 
 esugar_import_as_transform_test_() ->

@@ -1,77 +1,54 @@
-%% The contents of this file are subject to the Mozilla Public License
-%% Version 1.1 (the "License"); you may not use this file except in
-%% compliance with the License. You may obtain a copy of the License
-%% at http://www.mozilla.org/MPL/
-%%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and
-%% limitations under the License.
-%%
-%% The Original Code is Erlando.
-%%
-%% The Initial Developer of the Original Code is VMware, Inc.
-%% Copyright (c) 2011-2013 VMware, Inc.  All rights reserved.
-%%
-
 -module(esugar_import_as_transform).
-
+-export([format_error/1]).
 -export([parse_transform/2]).
 
-parse_transform(Forms, _Options) ->
-    %% io:format("Before:~n~p~n~n", [Forms]),
-    {[], Forms1} = lists:foldl(fun import_as/2, {[], []}, Forms),
-    Forms2 = lists:reverse(Forms1),
-    %% io:format("After:~n~s~n~n",
-    %%           [erl_prettypr:format(erl_syntax:form_list(Forms2))]),
-    Forms2.
 
-import_as({attribute, Line, import_as, {Module, Aliases}}, Acc) ->
-    import_as({attribute, Line, import_as, [{Module, Aliases}]}, Acc);
-import_as({attribute, Line, import_as, List}, {Funs, Acc})
-  when is_list(List) ->
-    Funs1 =
-        lists:foldl(
-          fun ({Module, Aliases}, Acc1) when is_list(Aliases) ->
-                  [alias_fun(Module, Line, Alias) || Alias <- Aliases] ++ Acc1;
-              (WrongThing, Acc1) ->
-                  [general_error_fun(Line, WrongThing) | Acc1]
-          end, Funs, List),
-    {Funs1, Acc};
-import_as({attribute, Line, import_as, WrongThing}, {Funs, Acc}) ->
-    {Funs, [general_error(Line, WrongThing) | Acc]};
-import_as({eof, Line}, {Funs, Acc}) ->
-    {Acc1, Line1} =
-        lists:foldl(
-          fun (Fun, {AccN, LineN}) -> {[Fun(LineN) | AccN], LineN + 1} end,
-          {Acc, Line}, Funs),
-    {[], [{eof, Line1} | Acc1]};
-import_as(Other, {Funs, Acc}) ->
-    {Funs, [Other | Acc]}.
+format_error({Format, Args}) ->
+    lists:flatten(io_lib:format(Format, Args));
+format_error(AnyThing) -> AnyThing.
 
-alias_fun(Module, _AttLine, {{Dest, Arity}, Alias}) when is_atom(Module) andalso
-                                                         is_atom(Dest) andalso
-                                                         is_atom(Alias) andalso
-                                                         is_integer(Arity) ->
-    fun (Line) ->
-            Vars = [{var, Line, list_to_atom("Var_" ++ integer_to_list(N))} ||
-                       N <- lists:seq(1, Arity)],
-            Body = {call, Line,
-                    {remote, Line, {atom, Line, Module}, {atom, Line, Dest}},
-                    Vars},
-            {function, Line, Alias, Arity, [{clause, Line, Vars, [], [Body]}]}
+
+parse_transform(Ast, _Options) ->
+    walk_ast(Ast).
+
+
+walk_ast([{attribute, Line, import_as, AttrValue} | T]) ->
+    case check_import_as(AttrValue) of
+    ok ->
+        {Module, AsList} = AttrValue,
+        lists:append(do_transform(Line, Module, AsList), walk_ast(T));
+    ErrArgument ->
+        [{error, {Line, ?MODULE, ErrArgument}} | walk_ast(T)]
     end;
-alias_fun(_Module, AttLine, WrongThing) ->
-    fun (_Line) ->
-            Str = io_lib:format("~p", [WrongThing]),
-            {error, {AttLine, erl_parse,
-                     ["-import_as: Expected a pair of "
-                      "{target_fun/arity, alias}, not: ", Str]}}
-    end.
+walk_ast([H | T]) -> [H | walk_ast(T)]; walk_ast([]) -> [].
 
-general_error_fun(AttLine, WrongThing) ->
-    fun (_Line) -> general_error(AttLine, WrongThing) end.
 
-general_error(AttLine, WrongThing) ->
-    Str = io_lib:format("~p", [WrongThing]),
-    {error, {AttLine, erl_parse, ["-import_as: invalid attribute value: ", Str]}}.
+do_transform(Line, Module, [{{F, Arity}, Alias} | T]) ->
+    Vars = [{var, Line, erlang:list_to_atom("Var" ++ integer_to_list(I))}
+                                                 || I <- lists:seq(1, Arity)],
+    Body = {call, Line, {remote, Line, {atom, Line, Module}
+                                                    , {atom, Line, F}}, Vars},
+    Func = {function, Line, Alias, Arity, [{clause, Line, Vars, [], [Body]}]},
+    [Func | do_transform(Line, Module, T)];
+do_transform(_Line, _Module, []) -> [].
+
+
+check_import_as(AttrValue) when not is_tuple(AttrValue); tuple_size(AttrValue) =/= 2 ->
+    {"`AttrValue: ~p` is expected to be a tuple of size 2", [AttrValue]};
+check_import_as({Module, _AsList}) when not is_atom(Module) ->
+    {"`Module: ~p` is expected to be an atom", [Module]};
+check_import_as({_Module, AsList}) when not is_list(AsList) ->
+    {"`AsList: ~p` is expected to be a list", [AsList]};
+check_import_as({_Module, [FArityAlias | _T]}) when not is_tuple(FArityAlias); tuple_size(FArityAlias) =/= 2 ->
+    {"`FArityAlias: ~p` is expected to be a tuple of size 2", [FArityAlias]};
+check_import_as({_Module, [{FArity, _Alias} | _T]}) when not is_tuple(FArity); tuple_size(FArity) =/= 2 ->
+    {"`FArity: ~p` is expected to be a form of `F/Arity`", [FArity]};
+check_import_as({_Module, [{_FArity, Alias} | _T]}) when not is_atom(Alias) ->
+    {"`Alias: ~p` is expected to be an atom", [Alias]};
+check_import_as({_Module, [{{F, _Arity}, _Alias} | _T]}) when not is_atom(F) ->
+    {"`F: ~p` is expected to be an atom", [F]};
+check_import_as({_Module, [{{_F, Arity}, _Alias} | _T]}) when not is_integer(Arity); Arity < 0; 255 < Arity ->
+    {"`Arity: ~p` is expected to be a non_neg_integer no more than 255", [Arity]};
+check_import_as({Module, [_H | T]}) -> check_import_as({Module, T});
+check_import_as({_Module, []}) -> ok.
+
