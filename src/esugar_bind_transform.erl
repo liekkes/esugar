@@ -1,221 +1,133 @@
-%% copy from erl_id_trans.erl
-
 -module(esugar_bind_transform).
+-export([format_error/1]).
 -export([parse_transform/2]).
 
+-define(get_scope_stack(), erlang:get(scope_stack)).
+-define(set_scope_stack(L), erlang:put(scope_stack, L)).
+-define(del_scope_stack(), erlang:erase(scope_stack)).
+-define(add_scope(), ?set_scope_stack([#{} | ?get_scope_stack()])).
+-define(del_scope(), ?set_scope_stack(erlang:tl(?get_scope_stack()))).
+-define(get_scope(), erlang:hd(?get_scope_stack())).
+-define(set_scope(S), ?set_scope_stack([S | tl(?get_scope_stack())])).
+-define(get_pattern(), erlang:get(pattern)).
+-define(set_pattern(P), erlang:put(pattern, P)).
+-define(clr_pattern(), begin ?set_scope(maps:merge(?get_scope()
+                , ?get_pattern())), erlang:erase(pattern) end).
 
-parse_transform(Forms, _Options) ->
-    forms(Forms).
 
-%% forms(Fs) -> lists:map(fun (F) -> form(F) end, Fs).
+format_error({Format, Args}) ->
+    lists:flatten(io_lib:format(Format, Args));
+format_error(AnyThing) -> AnyThing.
 
-forms([F0|Fs0]) ->
-    F1 = form(F0),
-    Fs1 = forms(Fs0),
-    [F1|Fs1];
-forms([]) -> [].
 
-%% -type form(Form) -> Form.
-%%  Here we show every known form and valid internal structure. We do not
-%%  that the ordering is correct!
+parse_transform(AST, _Options) ->
+    walk_ast(AST).
 
-%% First the various attributes.
-form({attribute,Line,module,Mod}) ->
-    {attribute,Line,module,Mod};
-form({attribute,Line,file,{File,Line}}) ->	%This is valid anywhere.
-    {attribute,Line,file,{File,Line}};
-form({attribute,Line,export,Es0}) ->
-    Es1 = farity_list(Es0),
-    {attribute,Line,export,Es1};
-form({attribute,Line,import,{Mod,Is0}}) ->
-    Is1 = farity_list(Is0),
-    {attribute,Line,import,{Mod,Is1}};
-form({attribute,Line,export_type,Es0}) ->
-    Es1 = farity_list(Es0),
-    {attribute,Line,export_type,Es1};
-form({attribute,Line,optional_callbacks,Es0}) ->
-    try farity_list(Es0) of
-        Es1 ->
-            {attribute,Line,optional_callbacks,Es1}
-    catch
-        _:_ ->
-            {attribute,Line,optional_callbacks,Es0}
+
+walk_ast([{function, _Line, _Name, _Arity, _Clauses} = Function | T]) ->
+    try [walk_function(Function) | walk_ast(T)] catch
+    throw:{ErrLine, ErrArgument} ->
+        [{error, {ErrLine, ?MODULE, ErrArgument}} | walk_ast(T)];
+    ErrType:ErrReason ->
+        erlang:raise(ErrType, ErrReason, erlang:get_stacktrace())
     end;
-form({attribute,Line,compile,C}) ->
-    {attribute,Line,compile,C};
-form({attribute,Line,record,{Name,Defs0}}) ->
-    Defs1 = record_defs(Defs0),
-    {attribute,Line,record,{Name,Defs1}};
-form({attribute,Line,asm,{function,N,A,Code}}) ->
-    {attribute,Line,asm,{function,N,A,Code}};
-form({attribute,Line,type,{N,T,Vs}}) ->
-    T1 = type(T),
-    Vs1 = variable_list(Vs),
-    {attribute,Line,type,{N,T1,Vs1}};
-form({attribute,Line,opaque,{N,T,Vs}}) ->
-    T1 = type(T),
-    Vs1 = variable_list(Vs),
-    {attribute,Line,opaque,{N,T1,Vs1}};
-form({attribute,Line,spec,{{N,A},FTs}}) ->
-    FTs1 = function_type_list(FTs),
-    {attribute,Line,spec,{{N,A},FTs1}};
-form({attribute,Line,spec,{{M,N,A},FTs}}) ->
-    FTs1 = function_type_list(FTs),
-    {attribute,Line,spec,{{M,N,A},FTs1}};
-form({attribute,Line,callback,{{N,A},FTs}}) ->
-    FTs1 = function_type_list(FTs),
-    {attribute,Line,callback,{{N,A},FTs1}};
-form({attribute,Line,Attr,Val}) ->		%The general attribute.
-    {attribute,Line,Attr,Val};
-form({function,Line,Name0,Arity0,Clauses0}) ->
-    {Name,Arity,Clauses} = function(Name0, Arity0, Clauses0),
-    {function,Line,Name,Arity,Clauses};
-%% Extra forms from the parser.
-form({error,E}) -> {error,E};
-form({warning,W}) -> {warning,W};
-form({eof,Line}) -> {eof,Line}.
+walk_ast([H | T]) -> [H | walk_ast(T)]; walk_ast([]) -> [].
 
-%% -type farity_list([Farity]) -> [Farity] when Farity <= {atom(),integer()}.
 
-farity_list([{Name,Arity}|Fas]) ->
-    [{Name,Arity}|farity_list(Fas)];
-farity_list([]) -> [].
+walk_function({function, Line, Name, Arity, Clauses}) ->
+    ?set_scope_stack([]),
+    Clauses2 = walk_function_clauses(Clauses),
+    ?del_scope_stack(),
+    {function, Line, Name, Arity, Clauses2}.
 
-%% -type variable_list([Var]) -> [Var]
 
-variable_list([{var,Line,Var}|Vs]) ->
-    [{var,Line,Var}|variable_list(Vs)];
-variable_list([]) -> [].
+walk_function_clauses([Clause | T]) ->
+    ?add_scope(),
+    Clause2 = walk_clause(Clause),
+    ?del_scope(),
+    [Clause2 | walk_function_clauses(T)];
+walk_function_clauses([]) -> [].
 
-%% -type record_defs([RecDef]) -> [RecDef].
-%%  N.B. Field names are full expressions here but only atoms are allowed
-%%  by the *parser*!
 
-record_defs([{record_field,Line,{atom,La,A},Val0}|Is]) ->
-    Val1 = expr(Val0),
-    [{record_field,Line,{atom,La,A},Val1}|record_defs(Is)];
-record_defs([{record_field,Line,{atom,La,A}}|Is]) ->
-    [{record_field,Line,{atom,La,A}}|record_defs(Is)];
-record_defs([{typed_record_field,{record_field,Line,{atom,La,A},Val0},Type}|
-             Is]) ->
-    Val1 = expr(Val0),
-    Type1 = type(Type),
-    [{typed_record_field,{record_field,Line,{atom,La,A},Val1},Type1}|
-     record_defs(Is)];
-record_defs([{typed_record_field,{record_field,Line,{atom,La,A}},Type}|Is]) ->
-    Type1 = type(Type),
-    [{typed_record_field,{record_field,Line,{atom,La,A}},Type1}|
-     record_defs(Is)];
-record_defs([]) -> [].
+walk_clause({clause, Line, Head, Guard, Body}) ->
+    ?set_pattern(#{}),
+    Head2 = walk_patterns(Head),
+    ?clr_pattern(),
+    Guard2 = guard(Guard),
+    Body2 = exprs(Body),
+    {clause, Line, Head2, Guard2, Body2}.
 
-%% -type function(atom(), integer(), [Clause]) -> {atom(),integer(),[Clause]}.
 
-function(Name, Arity, Clauses0) ->
-    set_scope_stack([]),
-    Clauses1 = clauses(Clauses0),
-    {Name,Arity,Clauses1}.
+walk_patterns([Pattern | T]) ->
+    [walk_pattern(Pattern) | walk_patterns(T)];
+walk_patterns([]) -> [].
 
-%% -type clauses([Clause]) -> [Clause].
 
-clauses([C0|Cs]) ->
-    add_scope(),
-    C1 = clause(C0),
-    del_scope(),
-    [C1|clauses(Cs)];
-clauses([]) -> [].
-
-%% -type clause(Clause) -> Clause.
-
-clause({clause,Line,H0,G0,B0}) ->
-    H1 = head(H0),
-    clr_pattern(),
-    G1 = guard(G0),
-    B1 = exprs(B0),
-    {clause,Line,H1,G1,B1}.
-
-%% -type head([Pattern]) -> [Pattern].
-
-head(Ps) -> patterns(Ps).
-
-%% -type patterns([Pattern]) -> [Pattern].
-%%  These patterns are processed "sequentially" for purposes of variable
-%%  definition etc.
-
-patterns([P0|Ps]) ->
-    P1 = pattern(P0),
-    [P1|patterns(Ps)];
-patterns([]) -> [].
-
-%% -type pattern(Pattern) -> Pattern.
-%%  N.B. Only valid patterns are included here.
-
-pattern({var,Line,Var}) ->
-    Var2 = left_var(Var),
-    {var,Line,Var2};
-pattern({match,Line,L0,R0}) ->
-    L1 = pattern(L0),
-    R1 = pattern(R0),
-    {match,Line,L1,R1};
-pattern({integer,Line,I}) -> {integer,Line,I};
-pattern({char,Line,C}) -> {char,Line,C};
-pattern({float,Line,F}) -> {float,Line,F};
-pattern({atom,Line,A}) -> {atom,Line,A};
-pattern({string,Line,S}) -> {string,Line,S};
-pattern({nil,Line}) -> {nil,Line};
-pattern({cons,Line,H0,T0}) ->
-    H1 = pattern(H0),
-    T1 = pattern(T0),
-    {cons,Line,H1,T1};
-pattern({tuple,Line,Ps0}) ->
-    Ps1 = pattern_list(Ps0),
-    {tuple,Line,Ps1};
-pattern({map,Line,Ps0}) ->
-    Ps1 = pattern_list(Ps0),
-    {map,Line,Ps1};
-pattern({map_field_exact,Line,K,V}) ->
+walk_pattern({var, Line, Var}) ->
+    {var, Line, left_var(Line, Var)};
+walk_pattern({match, Line, L, R}) ->
+    {match, Line, walk_pattern(L), walk_pattern(R)};
+walk_pattern({cons, Line, H, T}) ->
+    {cons, Line, walk_pattern(H), walk_pattern(T)};
+walk_pattern({tuple, Line, Patterns}) ->
+    {tuple, Line, walk_patterns(Patterns)};
+walk_pattern({map, Line, Patterns}) ->
+    {map, Line, walk_patterns(Patterns)};
+walk_pattern({map_field_exact,Line,K,V}) ->
     Ke = expr(K),
-    Ve = pattern(V),
+    Ve = walk_pattern(V),
     {map_field_exact,Line,Ke,Ve};
-%%pattern({struct,Line,Tag,Ps0}) ->
-%%    Ps1 = pattern_list(Ps0),
-%%    {struct,Line,Tag,Ps1};
-pattern({record,Line,Name,Pfs0}) ->
+walk_pattern({record,Line,Name,Pfs0}) ->
     Pfs1 = pattern_fields(Pfs0),
     {record,Line,Name,Pfs1};
-pattern({record_index,Line,Name,Field0}) ->
-    Field1 = pattern(Field0),
+walk_pattern({record_index,Line,Name,Field0}) ->
+    Field1 = walk_pattern(Field0),
     {record_index,Line,Name,Field1};
-pattern({record_field,Line,Rec0,Name,Field0}) ->
+walk_pattern({record_field,Line,Rec0,Name,Field0}) ->
     Rec1 = expr(Rec0),
     Field1 = expr(Field0),
     {record_field,Line,Rec1,Name,Field1};
-pattern({record_field,Line,Rec0,Field0}) ->
+walk_pattern({record_field,Line,Rec0,Field0}) ->
     Rec1 = expr(Rec0),
     Field1 = expr(Field0),
     {record_field,Line,Rec1,Field1};
-pattern({bin,Line,Fs}) ->
+walk_pattern({bin,Line,Fs}) ->
     Fs2 = pattern_grp(Fs),
     {bin,Line,Fs2};
-pattern({op,Line,Op,A}) ->
-    {op,Line,Op,A};
-pattern({op,Line,Op,L,R}) ->
-    {op,Line,Op,L,R}.
+walk_pattern(Pattern) -> Pattern.
 
 pattern_grp([{bin_element,L1,E1,S1,T1} | Fs]) ->
     S2 = case S1 of
-	     default ->
-		 default;
-	     _ ->
-		 expr(S1)
-	 end,
+         default ->
+         default;
+         _ ->
+         expr(S1)
+     end,
     T2 = case T1 of
-	     default ->
-		 default;
-	     _ ->
-		 bit_types(T1)
-	 end,
-    [{bin_element,L1,expr(E1),S2,T2} | pattern_grp(Fs)];
+         default ->
+         default;
+         _ ->
+         bit_types(T1)
+     end,
+    [{bin_element,L1,walk_pattern(E1),S2,T2} | pattern_grp(Fs)];
 pattern_grp([]) ->
+    [].
+
+expr_grp([{bin_element,L1,E1,S1,T1} | Fs]) ->
+    S2 = case S1 of
+         default ->
+         default;
+         _ ->
+         expr(S1)
+     end,
+    T2 = case T1 of
+         default ->
+         default;
+         _ ->
+         bit_types(T1)
+     end,
+    [{bin_element,L1,expr(E1),S2,T2} | expr_grp(Fs)];
+expr_grp([]) ->
     [].
 
 bit_types([]) ->
@@ -226,25 +138,15 @@ bit_types([{Atom, Integer} | Rest]) when is_atom(Atom), is_integer(Integer) ->
     [{Atom, Integer} | bit_types(Rest)].
 
 
-
-%% -type pattern_list([Pattern]) -> [Pattern].
-%%  These patterns are processed "in parallel" for purposes of variable
-%%  definition etc.
-
-pattern_list([P0|Ps]) ->
-    P1 = pattern(P0),
-    [P1|pattern_list(Ps)];
-pattern_list([]) -> [].
-
 %% -type pattern_fields([Field]) -> [Field].
 %%  N.B. Field names are full expressions here but only atoms are allowed
 %%  by the *linter*!.
 
 pattern_fields([{record_field,Lf,{atom,La,F},P0}|Pfs]) ->
-    P1 = pattern(P0),
+    P1 = walk_pattern(P0),
     [{record_field,Lf,{atom,La,F},P1}|pattern_fields(Pfs)];
 pattern_fields([{record_field,Lf,{var,La,'_'},P0}|Pfs]) ->
-    P1 = pattern(P0),
+    P1 = walk_pattern(P0),
     [{record_field,Lf,{var,La,'_'},P1}|pattern_fields(Pfs)];
 pattern_fields([]) -> [].
 
@@ -262,11 +164,11 @@ guard0([]) -> [].
 
 guard_test(Expr={call,Line,{atom,La,F},As0}) ->
     case erl_internal:type_test(F, length(As0)) of
-	true -> 
-	    As1 = gexpr_list(As0),
-	    {call,Line,{atom,La,F},As1};
-	_ ->
-	    gexpr(Expr)
+    true -> 
+        As1 = gexpr_list(As0),
+        {call,Line,{atom,La,F},As1};
+    _ ->
+        gexpr(Expr)
     end;
 guard_test(Any) ->
     gexpr(Any).
@@ -277,7 +179,7 @@ guard_test(Any) ->
 %% -type gexpr(GuardExpr) -> GuardExpr.
 
 gexpr({var,Line,Var}) ->
-    Var2 = right_var(Var),
+    Var2 = right_var(Line, Var),
     {var,Line,Var2};
 gexpr({integer,Line,I}) -> {integer,Line,I};
 gexpr({char,Line,C}) -> {char,Line,C};
@@ -301,7 +203,7 @@ gexpr({map_field_exact,Line,K,V}) ->
     {map_field_exact,Line,Ke,Ve};
 gexpr({cons,Line,H0,T0}) ->
     H1 = gexpr(H0),
-    T1 = gexpr(T0),				%They see the same variables
+    T1 = gexpr(T0),             %They see the same variables
     {cons,Line,H1,T1};
 gexpr({tuple,Line,Es0}) ->
     Es1 = gexpr_list(Es0),
@@ -318,40 +220,40 @@ gexpr({record,Line,Name,Inits0}) ->
     {record,Line,Name,Inits1};
 gexpr({call,Line,{atom,La,F},As0}) ->
     case erl_internal:guard_bif(F, length(As0)) of
-	true -> As1 = gexpr_list(As0),
-		{call,Line,{atom,La,F},As1}
+    true -> As1 = gexpr_list(As0),
+        {call,Line,{atom,La,F},As1}
     end;
 % Guard bif's can be remote, but only in the module erlang...
 gexpr({call,Line,{remote,La,{atom,Lb,erlang},{atom,Lc,F}},As0}) ->
     case erl_internal:guard_bif(F, length(As0)) or
-	 erl_internal:arith_op(F, length(As0)) or 
-	 erl_internal:comp_op(F, length(As0)) or
-	 erl_internal:bool_op(F, length(As0)) of
-	true -> As1 = gexpr_list(As0),
-		{call,Line,{remote,La,{atom,Lb,erlang},{atom,Lc,F}},As1}
+     erl_internal:arith_op(F, length(As0)) or 
+     erl_internal:comp_op(F, length(As0)) or
+     erl_internal:bool_op(F, length(As0)) of
+    true -> As1 = gexpr_list(As0),
+        {call,Line,{remote,La,{atom,Lb,erlang},{atom,Lc,F}},As1}
     end;
 gexpr({bin,Line,Fs}) ->
-    Fs2 = pattern_grp(Fs),
+    Fs2 = expr_grp(Fs),
     {bin,Line,Fs2};
 gexpr({op,Line,Op,A0}) ->
     case erl_internal:arith_op(Op, 1) or 
-	 erl_internal:bool_op(Op, 1) of
-	true -> A1 = gexpr(A0),
-		{op,Line,Op,A1}
+     erl_internal:bool_op(Op, 1) of
+    true -> A1 = gexpr(A0),
+        {op,Line,Op,A1}
     end;
 gexpr({op,Line,Op,L0,R0}) when Op =:= 'andalso'; Op =:= 'orelse' ->
     %% R11B: andalso/orelse are now allowed in guards.
     L1 = gexpr(L0),
-    R1 = gexpr(R0),			%They see the same variables
+    R1 = gexpr(R0),         %They see the same variables
     {op,Line,Op,L1,R1};
 gexpr({op,Line,Op,L0,R0}) ->
     case erl_internal:arith_op(Op, 2) or
-	  erl_internal:bool_op(Op, 2) or 
-	  erl_internal:comp_op(Op, 2) of
-	true ->
-	    L1 = gexpr(L0),
-	    R1 = gexpr(R0),			%They see the same variables
-	    {op,Line,Op,L1,R1}
+      erl_internal:bool_op(Op, 2) or 
+      erl_internal:comp_op(Op, 2) of
+    true ->
+        L1 = gexpr(L0),
+        R1 = gexpr(R0),         %They see the same variables
+        {op,Line,Op,L1,R1}
     end.
 
 %% -type gexpr_list([GuardExpr]) -> [GuardExpr].
@@ -383,7 +285,7 @@ exprs([]) -> [].
 %% -type expr(Expression) -> Expression.
 
 expr({var,Line,Var}) ->
-    Var2 = right_var(Var),
+    Var2 = right_var(Line, Var),
     {var,Line,Var2};
 expr({integer,Line,I}) -> {integer,Line,I};
 expr({float,Line,F}) -> {float,Line,F};
@@ -393,15 +295,19 @@ expr({char,Line,C}) -> {char,Line,C};
 expr({nil,Line}) -> {nil,Line};
 expr({cons,Line,H0,T0}) ->
     H1 = expr(H0),
-    T1 = expr(T0),				%They see the same variables
+    T1 = expr(T0),              %They see the same variables
     {cons,Line,H1,T1};
 expr({lc,Line,E0,Qs0}) ->
+    ?add_scope(),
     Qs1 = lc_bc_quals(Qs0),
     E1 = expr(E0),
+    ?del_scope(),
     {lc,Line,E1,Qs1};
 expr({bc,Line,E0,Qs0}) ->
+    ?add_scope(),
     Qs1 = lc_bc_quals(Qs0),
     E1 = expr(E0),
+    ?del_scope(),
     {bc,Line,E1,Qs1};
 expr({tuple,Line,Es0}) ->
     Es1 = expr_list(Es0),
@@ -421,7 +327,7 @@ expr({map_field_exact,Line,K,V}) ->
     Ve = expr(V),
     {map_field_exact,Line,Ke,Ve};
 %%expr({struct,Line,Tag,Es0}) ->
-%%    Es1 = pattern_list(Es0),
+%%    Es1 = walk_patterns(Es0),
 %%    {struct,Line,Tag,Es1};
 expr({record_index,Line,Name,Field0}) ->
     Field1 = expr(Field0),
@@ -446,45 +352,57 @@ expr({block,Line,Es0}) ->
     Es1 = exprs(Es0),
     {block,Line,Es1};
 expr({'if',Line,Cs0}) ->
-    Cs1 = icr_clauses(Cs0),
+    Scope = ?get_scope(),
+    Cs1 = icr_clauses(Cs0, Scope, Scope),
     {'if',Line,Cs1};
 expr({'case',Line,E0,Cs0}) ->
     E1 = expr(E0),
-    Cs1 = icr_clauses(Cs0),
+    Scope = ?get_scope(),
+    Cs1 = icr_clauses(Cs0, Scope, Scope),
     {'case',Line,E1,Cs1};
 expr({'receive',Line,Cs0}) ->
-    Cs1 = icr_clauses(Cs0),
+    Scope = ?get_scope(),
+    Cs1 = icr_clauses(Cs0, Scope, Scope),
     {'receive',Line,Cs1};
 expr({'receive',Line,Cs0,To0,ToEs0}) ->
     To1 = expr(To0),
     ToEs1 = exprs(ToEs0),
-    Cs1 = icr_clauses(Cs0),
+    Scope = ?get_scope(),
+    Cs1 = icr_clauses(Cs0, Scope, Scope),
     {'receive',Line,Cs1,To1,ToEs1};
 expr({'try',Line,Es0,Scs0,Ccs0,As0}) ->
     Es1 = exprs(Es0),
-    Scs1 = icr_clauses(Scs0),
-    Ccs1 = icr_clauses(Ccs0),
+    Scope = ?get_scope(),
+    Scs1 = icr_clauses(Scs0, Scope, Scope),
+    Scope2 = ?get_scope(),
+    Ccs1 = icr_clauses(Ccs0, Scope2, Scope2),
     As1 = exprs(As0),
     {'try',Line,Es1,Scs1,Ccs1,As1};
 expr({'fun',Line,Body}) ->
     case Body of
-	{clauses,Cs0} ->
-	    Cs1 = fun_clauses(Cs0),
-	    {'fun',Line,{clauses,Cs1}};
-	{function,F,A} ->
-	    {'fun',Line,{function,F,A}};
-	{function,M,F,A} when is_atom(M), is_atom(F), is_integer(A) ->
-	    %% R10B-6: fun M:F/A. (Backward compatibility)
-	    {'fun',Line,{function,M,F,A}};
-	{function,M0,F0,A0} ->
-	    %% R15: fun M:F/A with variables.
-	    M = expr(M0),
-	    F = expr(F0),
-	    A = expr(A0),
-	    {'fun',Line,{function,M,F,A}}
+    {clauses,Cs0} ->
+        Cs1 = fun_clauses(Cs0),
+        {'fun',Line,{clauses,Cs1}};
+    {function,F,A} ->
+        {'fun',Line,{function,F,A}};
+    {function,M,F,A} when is_atom(M), is_atom(F), is_integer(A) ->
+        %% R10B-6: fun M:F/A. (Backward compatibility)
+        {'fun',Line,{function,M,F,A}};
+    {function,M0,F0,A0} ->
+        %% R15: fun M:F/A with variables.
+        M = expr(M0),
+        F = expr(F0),
+        A = expr(A0),
+        {'fun',Line,{function,M,F,A}}
     end;
 expr({named_fun,Loc,Name,Cs}) ->
-    {named_fun,Loc,Name,fun_clauses(Cs)};
+    ?add_scope(),
+    ?set_pattern(#{}),
+    Name2 = left_var(Loc, Name),
+    ?clr_pattern(),
+    Cs2 = fun_clauses(Cs),
+    ?del_scope(),
+    {named_fun,Loc,Name2,Cs2};
 expr({call,Line,F0,As0}) ->
     %% N.B. If F an atom then call to local function or BIF, if F a
     %% remote structure (see below) then call to other module,
@@ -498,24 +416,26 @@ expr({'catch',Line,E0}) ->
     {'catch',Line,E1};
 expr({match,Line,P0,E0}) ->
     E1 = expr(E0),
-    P1 = pattern(P0),
-    clr_pattern(),
+    ?set_pattern(#{}),
+    P1 = walk_pattern(P0),
+    ?clr_pattern(),
     {match,Line,P1,E1};
 expr({bin,Line,Fs}) ->
-    Fs2 = pattern_grp(Fs),
+    Fs2 = expr_grp(Fs),
     {bin,Line,Fs2};
 expr({op,Line,Op,A0}) ->
     A1 = expr(A0),
     {op,Line,Op,A1};
 expr({op,Line,Op,L0,R0}) ->
     L1 = expr(L0),
-    R1 = expr(R0),				%They see the same variables
+    R1 = expr(R0),              %They see the same variables
     {op,Line,Op,L1,R1};
 %% The following are not allowed to occur anywhere!
 expr({remote,Line,M0,F0}) ->
     M1 = expr(M0),
     F1 = expr(F0),
-    {remote,Line,M1,F1}.
+    {remote,Line,M1,F1};
+expr(Expr) -> Expr.
 
 %% -type expr_list([Expression]) -> [Expression].
 %%  These expressions are processed "in parallel" for purposes of variable
@@ -549,21 +469,30 @@ record_updates([]) -> [].
 
 %% -type icr_clauses([Clause]) -> [Clause].
 
-icr_clauses([C0|Cs]) ->
-    C1 = clause(C0),
-    [C1|icr_clauses(Cs)];
-icr_clauses([]) -> [].
+icr_clauses([C0|Cs], AccScope, OldScope) ->
+    ?set_scope(OldScope),
+    C1 = walk_clause(C0),
+    IcrScope = ?get_scope(),
+    AccScope2 = merge_scope(AccScope, IcrScope),
+    [C1|icr_clauses(Cs, AccScope2, OldScope)];
+icr_clauses([], AccScope, _OldScope) ->
+    ?set_scope(AccScope),
+    [].
 
 %% -type lc_bc_quals([Qualifier]) -> [Qualifier].
 %%  Allow filters to be both guard tests and general expressions.
 
 lc_bc_quals([{generate,Line,P0,E0}|Qs]) ->
     E1 = expr(E0),
-    P1 = pattern(P0),
+    ?set_pattern(#{}),
+    P1 = walk_pattern(P0),
+    ?clr_pattern(),
     [{generate,Line,P1,E1}|lc_bc_quals(Qs)];
 lc_bc_quals([{b_generate,Line,P0,E0}|Qs]) ->
     E1 = expr(E0),
-    P1 = pattern(P0),
+    ?set_pattern(#{}),
+    P1 = walk_pattern(P0),
+    ?clr_pattern(),
     [{b_generate,Line,P1,E1}|lc_bc_quals(Qs)];
 lc_bc_quals([E0|Qs]) ->
     E1 = expr(E0),
@@ -573,168 +502,25 @@ lc_bc_quals([]) -> [].
 %% -type fun_clauses([Clause]) -> [Clause].
 
 fun_clauses([C0|Cs]) ->
-    add_scope(),
-    C1 = clause(C0),
-    del_scope(),
+    ?add_scope(),
+    C1 = walk_clause(C0),
+    ?del_scope(),
     [C1|fun_clauses(Cs)];
 fun_clauses([]) -> [].
 
-function_type_list([{type,Line,bounded_fun,[Ft,Fc]}|Fts]) ->
-    Ft1 = function_type(Ft),
-    Fc1 = function_constraint(Fc),
-    [{type,Line,bounded_fun,[Ft1,Fc1]}|function_type_list(Fts)];
-function_type_list([Ft|Fts]) ->
-    [function_type(Ft)|function_type_list(Fts)];
-function_type_list([]) -> [].
-
-function_type({type,Line,'fun',[{type,Lt,product,As},B]}) ->
-    As1 = type_list(As),
-    B1 = type(B),
-    {type,Line,'fun',[{type,Lt,product,As1},B1]}.
-
-function_constraint([C|Cs]) ->
-    C1 = constraint(C),
-    [C1|function_constraint(Cs)];
-function_constraint([]) -> [].
-
-constraint({type,Line,constraint,[{atom,L,A},[V,T]]}) ->
-    V1 = type(V),
-    T1 = type(T),
-    {type,Line,constraint,[{atom,L,A},[V1,T1]]}.
-
-type({ann_type,Line,[{var,Lv,V},T]}) ->
-    T1 = type(T),
-    {ann_type,Line,[{var,Lv,V},T1]};
-type({atom,Line,A}) ->
-    {atom,Line,A};
-type({integer,Line,I}) ->
-    {integer,Line,I};
-type({op,Line,Op,T}) ->
-    T1 = type(T),
-    {op,Line,Op,T1};
-type({op,Line,Op,L,R}) ->
-    L1 = type(L),
-    R1 = type(R),
-    {op,Line,Op,L1,R1};
-type({type,Line,binary,[M,N]}) ->
-    M1 = type(M),
-    N1 = type(N),
-    {type,Line,binary,[M1,N1]};
-type({type,Line,'fun',[]}) ->
-    {type,Line,'fun',[]};
-type({type,Line,'fun',[{type,Lt,any},B]}) ->
-    B1 = type(B),
-    {type,Line,'fun',[{type,Lt,any},B1]};
-type({type,Line,range,[L,H]}) ->
-    L1 = type(L),
-    H1 = type(H),
-    {type,Line,range,[L1,H1]};
-type({type,Line,map,any}) ->
-    {type,Line,map,any};
-type({type,Line,map,Ps}) ->
-    Ps1 = map_pair_types(Ps),
-    {type,Line,map,Ps1};
-type({type,Line,record,[{atom,La,N}|Fs]}) ->
-    Fs1 = field_types(Fs),
-    {type,Line,record,[{atom,La,N}|Fs1]};
-type({remote_type,Line,[{atom,Lm,M},{atom,Ln,N},As]}) ->
-    As1 = type_list(As),
-    {remote_type,Line,[{atom,Lm,M},{atom,Ln,N},As1]};
-type({type,Line,tuple,any}) ->
-    {type,Line,tuple,any};
-type({type,Line,tuple,Ts}) ->
-    Ts1 = type_list(Ts),
-    {type,Line,tuple,Ts1};
-type({type,Line,union,Ts}) ->
-    Ts1 = type_list(Ts),
-    {type,Line,union,Ts1};
-type({var,Line,V}) ->
-    {var,Line,V};
-type({user_type,Line,N,As}) ->
-    As1 = type_list(As),
-    {user_type,Line,N,As1};
-type({type,Line,N,As}) ->
-    As1 = type_list(As),
-    {type,Line,N,As1}.
-
-map_pair_types([{type,Line,map_field_assoc,[K,V]}|Ps]) ->
-    K1 = type(K),
-    V1 = type(V),
-    [{type,Line,map_field_assoc,[K1,V1]}|map_pair_types(Ps)];
-map_pair_types([{type,Line,map_field_exact,[K,V]}|Ps]) ->
-    K1 = type(K),
-    V1 = type(V),
-    [{type,Line,map_field_exact,[K1,V1]}|map_pair_types(Ps)];
-map_pair_types([]) -> [].
-
-field_types([{type,Line,field_type,[{atom,La,A},T]}|Fs]) ->
-    T1 = type(T),
-    [{type,Line,field_type,[{atom,La,A},T1]}|field_types(Fs)];
-field_types([]) -> [].
-
-type_list([T|Ts]) ->
-    T1 = type(T),
-    [T1|type_list(Ts)];
-type_list([]) -> [].
 
 
 
 
-
-
-
-
-
-
-
-get_scope_stack() ->
-    case erlang:get(scope_stack) of
-        [_ | _] = L -> L; _ -> []
-    end.
-
-set_scope_stack(L) ->
-    erlang:put(scope_stack, L).
-
-get_scope() ->
-    case get_scope_stack() of
-        [#{} = S | _] -> S; _ -> #{}
-    end.
-
-set_scope(S) ->
-    case get_scope_stack() of
-    [_ | T] ->
-        set_scope_stack([S | T]);
-    _ ->
-        set_scope_stack([S])
-    end.
-
-add_scope() ->
-    case get_scope_stack() of
-    [_ | _] = L ->
-        set_scope_stack([#{} | L]);
-    _ ->
-        set_scope_stack([#{}])
-    end.
-
-del_scope() ->
-    case get_scope_stack() of
-    [_ | T] ->
-        set_scope_stack(T);
-    _ ->
-        set_scope_stack([])
-    end.
-
-get_pattern() ->
-    case erlang:get(pattern) of
-        #{} = P -> P; _ -> #{}
-    end.
-
-set_pattern(P) ->
-    erlang:put(pattern, P).
-
-clr_pattern() ->
-    set_scope(maps:merge(get_scope(), get_pattern())),
-    erlang:erase(pattern).
+merge_scope(ScopeA, ScopeB) ->
+    maps:fold(fun(K, VB, Acc) ->
+        case Acc of
+        #{K := VA} when VA > VB ->
+            Acc;
+        _ ->
+            Acc#{K => VB}
+        end
+    end, ScopeA, ScopeB).
 
 
 -define(INIT_NO, 1).
@@ -746,7 +532,8 @@ concat(Var, No) ->
         ++ erlang:integer_to_list(No)
     ).
 
-left_var(VarOrVarAt) ->
+left_var(Line, '_') -> '_';
+left_var(Line, VarOrVarAt) ->
     case lists:reverse(erlang:atom_to_list(VarOrVarAt)) of
     "@" ++ RevInit ->
         Var = erlang:list_to_atom(lists:reverse(RevInit)),
@@ -755,25 +542,30 @@ left_var(VarOrVarAt) ->
         Var = VarOrVarAt,
         LastCharIsAt = false
     end,
-    Pattern = get_pattern(),
+    Pattern = ?get_pattern(),
     case Pattern of
     #{Var := No} ->
         concat(Var, No);
     _ ->
-        ScopeStack = get_scope_stack(),
+        ScopeStack = ?get_scope_stack(),
         case left_no(Var, ScopeStack) of
         No when is_integer(No) ->
-            No2 = No + 1,
-            set_pattern(Pattern#{Var => No2}),
+            case LastCharIsAt of
+            false ->
+                No2 = No + 1;
+            _ ->
+                No2 = No
+            end,
+            ?set_pattern(Pattern#{Var => No2}),
             concat(Var, No2);
         _ ->
             case LastCharIsAt of
             false ->
                 No = ?INIT_NO,
-                set_pattern(Pattern#{Var => No}),
+                ?set_pattern(Pattern#{Var => No}),
                 concat(Var, No);
             _ ->
-                erlang:throw(error)
+                erlang:throw({111, {"~p", [Var]}})
             end
         end
     end.
@@ -788,15 +580,15 @@ left_no(_Var, _ScopeStack) ->
 
 
 
-right_var(Var) ->
+right_var(Line, Var) ->
     case lists:reverse(erlang:atom_to_list(Var)) of
-    "@" ++ _Init -> erlang:throw(error); _ -> next
+    "@" ++ _Init -> erlang:throw({error, Line, Var}); _ -> next
     end,
-    ScopeStack = get_scope_stack(),
+    ScopeStack = ?get_scope_stack(),
     case right_no(Var, ScopeStack) of
     No when is_integer(No) ->
         concat(Var, No);
-    _ -> erlang:throw(error)
+    _ -> erlang:throw({Line, {"~p", [Var]}})
     end.
 
 right_no(Var, [Scope | T]) ->
