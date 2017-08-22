@@ -73,82 +73,33 @@ walk_pattern({tuple, Line, Patterns}) ->
     {tuple, Line, walk_patterns(Patterns)};
 walk_pattern({map, Line, Patterns}) ->
     {map, Line, walk_patterns(Patterns)};
-walk_pattern({map_field_exact,Line,K,V}) ->
-    Ke = expr(K),
-    Ve = walk_pattern(V),
-    {map_field_exact,Line,Ke,Ve};
-walk_pattern({record,Line,Name,Pfs0}) ->
-    Pfs1 = pattern_fields(Pfs0),
-    {record,Line,Name,Pfs1};
-walk_pattern({record_index,Line,Name,Field0}) ->
-    Field1 = walk_pattern(Field0),
-    {record_index,Line,Name,Field1};
-walk_pattern({record_field,Line,Rec0,Name,Field0}) ->
-    Rec1 = expr(Rec0),
-    Field1 = expr(Field0),
-    {record_field,Line,Rec1,Name,Field1};
-walk_pattern({record_field,Line,Rec0,Field0}) ->
-    Rec1 = expr(Rec0),
-    Field1 = expr(Field0),
-    {record_field,Line,Rec1,Field1};
-walk_pattern({bin,Line,Fs}) ->
-    Fs2 = pattern_grp(Fs),
-    {bin,Line,Fs2};
+walk_pattern({map_field_exact, Line, K, V}) ->
+    {map_field_exact, Line, expr(K), walk_pattern(V)};
+walk_pattern({record, Line, Name, Fields}) ->
+    {record, Line, Name, walk_record_fields(Fields)};
+walk_pattern({record_index, Line, Name, Field}) ->
+    {record_index, Line, Name, walk_pattern(Field)};
+walk_pattern({record_field, Line, Rec, Name, Field}) ->
+    {record_field, Line, expr(Rec), Name, expr(Field)};
+walk_pattern({record_field, Line, Rec, Field}) ->
+    {record_field, Line, expr(Rec), expr(Field)};
+walk_pattern({bin, Line, Fs}) ->
+    {bin, Line, pattern_grp(Fs)};
 walk_pattern(Pattern) -> Pattern.
 
-pattern_grp([{bin_element,L1,E1,S1,T1} | Fs]) ->
-    S2 = case S1 of
-         default ->
-         default;
-         _ ->
-         expr(S1)
-     end,
-    T2 = case T1 of
-         default ->
-         default;
-         _ ->
-         bit_types(T1)
-     end,
-    [{bin_element,L1,walk_pattern(E1),S2,T2} | pattern_grp(Fs)];
+pattern_grp([{bin_element, Line, P, Size, TSL} | T]) ->
+    [{bin_element, Line, walk_pattern(P), expr(Size), TSL} | pattern_grp(T)];
 pattern_grp([]) ->
     [].
 
-expr_grp([{bin_element,L1,E1,S1,T1} | Fs]) ->
-    S2 = case S1 of
-         default ->
-         default;
-         _ ->
-         expr(S1)
-     end,
-    T2 = case T1 of
-         default ->
-         default;
-         _ ->
-         bit_types(T1)
-     end,
-    [{bin_element,L1,expr(E1),S2,T2} | expr_grp(Fs)];
-expr_grp([]) ->
-    [].
 
-bit_types([]) ->
-    [];
-bit_types([Atom | Rest]) when is_atom(Atom) ->
-    [Atom | bit_types(Rest)];
-bit_types([{Atom, Integer} | Rest]) when is_atom(Atom), is_integer(Integer) ->
-    [{Atom, Integer} | bit_types(Rest)].
-
-
-%% -type pattern_fields([Field]) -> [Field].
-%%  N.B. Field names are full expressions here but only atoms are allowed
-%%  by the *linter*!.
-
-pattern_fields([{record_field,Lf,{atom,La,F},P0}|Pfs]) ->
+walk_record_fields([{record_field,Lf,{atom,La,F},P0}|Pfs]) ->
     P1 = walk_pattern(P0),
-    [{record_field,Lf,{atom,La,F},P1}|pattern_fields(Pfs)];
-pattern_fields([{record_field,Lf,{var,La,'_'},P0}|Pfs]) ->
+    [{record_field,Lf,{atom,La,F},P1}|walk_record_fields(Pfs)];
+walk_record_fields([{record_field,Lf,{var,La,'_'},P0}|Pfs]) ->
     P1 = walk_pattern(P0),
-    [{record_field,Lf,{var,La,'_'},P1}|pattern_fields(Pfs)];
-pattern_fields([]) -> [].
+    [{record_field,Lf,{var,La,'_'},P1}|walk_record_fields(Pfs)];
+walk_record_fields([]) -> [].
 
 %% -type guard([GuardTest]) -> [GuardTest].
 
@@ -445,6 +396,23 @@ expr_list([E0|Es]) ->
     E1 = expr(E0),
     [E1|expr_list(Es)];
 expr_list([]) -> [].
+
+expr_grp([{bin_element,L1,E1,S1,T1} | Fs]) ->
+    S2 = case S1 of
+         default ->
+         default;
+         _ ->
+         expr(S1)
+     end,
+    T2 = case T1 of
+         default ->
+         default;
+         _ ->
+         (T1)
+     end,
+    [{bin_element,L1,expr(E1),S2,T2} | expr_grp(Fs)];
+expr_grp([]) ->
+    [].
 
 %% -type record_inits([RecordInit]) -> [RecordInit].
 %%  N.B. Field names are full expressions here but only atoms are allowed
