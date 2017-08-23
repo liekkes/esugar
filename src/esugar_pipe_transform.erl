@@ -2,19 +2,19 @@
 -export([parse_transform/2]).
 
 
-parse_transform(AST, _Options) ->
-    walk_ast(AST).
+parse_transform(Forms, _Options) ->
+    walk_form(Forms).
 
 
-walk_ast({call, Line, {atom, _, pipe@}, [{op, _, '!', First, Second}]}) ->
+walk_form({call, Line, {atom, _, pipe@}, [{op, _, '!', First, Second}]}) ->
     do_transform(Line, First, Second);
-walk_ast({call, _Line, {atom, _, pipe@}, [First]}) ->
+walk_form({call, _Line, {atom, _, pipe@}, [First]}) ->
     First;
-walk_ast(AST) when is_tuple(AST) ->
-    erlang:list_to_tuple(walk_ast(erlang:tuple_to_list(AST)));
-walk_ast(AST) when is_list(AST) ->
-    [walk_ast(E) || E <- AST];
-walk_ast(AST) -> AST.
+walk_form(Form) when is_tuple(Form) ->
+    erlang:list_to_tuple(walk_form(erlang:tuple_to_list(Form)));
+walk_form(Forms) when is_list(Forms) ->
+    [walk_form(Form) || Form <- Forms];
+walk_form(Form) -> Form.
 
 
 do_transform(Line, First, {op, _, '!', {call, _, Func, Args}, Second}) ->

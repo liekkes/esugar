@@ -8,19 +8,19 @@ format_error({Format, Args}) ->
 format_error(AnyThing) -> AnyThing.
 
 
-parse_transform(Ast, _Options) ->
-    walk_ast(Ast).
+parse_transform(Forms, _Options) ->
+    walk_form(Forms).
 
 
-walk_ast([{attribute, Line, import_as, AttrValue} | T]) ->
+walk_form([{attribute, Line, import_as, AttrValue} | T]) ->
     case check_import_as(AttrValue) of
     ok ->
         {Module, AsList} = AttrValue,
-        lists:append(do_transform(Line, Module, AsList), walk_ast(T));
+        lists:append(do_transform(Line, Module, AsList), walk_form(T));
     ErrArgument ->
-        [{error, {Line, ?MODULE, ErrArgument}} | walk_ast(T)]
+        [{error, {Line, ?MODULE, ErrArgument}} | walk_form(T)]
     end;
-walk_ast([H | T]) -> [H | walk_ast(T)]; walk_ast([]) -> [].
+walk_form([H | T]) -> [H | walk_form(T)]; walk_form([]) -> [].
 
 
 do_transform(Line, Module, [{{F, Arity}, Alias} | T]) ->
