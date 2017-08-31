@@ -1,9 +1,9 @@
 -module(esugar_monad).
--compile({parse_transform, esugar_do_transform}).
--export([join/2, sequence/2]).
-
-
 -export_type([monad/0, monadic/2]).
+-export([join/2, sequence/2]).
+-define(ID, fun id/1).
+
+
 -type monad() :: module() | {module(), monad()}.
 -type monadic(_M, _A) :: any().
 
@@ -17,16 +17,16 @@
 
 
 -spec join(M, esugar_monad:monadic(M, esugar_monad:monadic(M, A))) ->
-    esugar_monad:monadic(M, A).
-join(Monad, X) -> do([Monad || Y <- X, Y]).
+    esugar_monad:monadic(M, A) when M :: esugar_monad:monad().
+join(Monad, X) -> Monad:'>>='(X, ?ID).
 
 
 -spec sequence(M, [esugar_monad:monadic(M, A)]) ->
-    esugar_monad:monadic(M, [A]).
-sequence(Monad, Xs) -> sequence(Monad, Xs, []).
+    esugar_monad:monadic(M, [A]) when M :: esugar_monad:monad().
+sequence(Monad, Xs) ->
+    Monad:return([Monad:'>>='(X, ?ID) || X <- Xs]).
 
-sequence(Monad, [], Acc) ->
-    do([Monad || return(lists:reverse(Acc))]);
-sequence(Monad, [X | Xs], Acc) ->
-    do([Monad || E <- X, sequence(Monad, Xs, [E | Acc])]).
+
+-spec id(A) -> A.
+id(X) -> X.
 

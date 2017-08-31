@@ -232,11 +232,7 @@ left_no(_Var, _ScopeStack) ->
     undefined.
 
 
-
 right_var(Line, Var) ->
-    case lists:reverse(erlang:atom_to_list(Var)) of
-    "@" ++ _Init -> erlang:throw({error, Line, Var}); _ -> next
-    end,
     ScopeStack = ?get_scope_stack(),
     case right_no(Var, ScopeStack) of
     No when is_integer(No) ->

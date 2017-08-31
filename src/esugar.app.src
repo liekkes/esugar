@@ -1,9 +1,14 @@
 {application, esugar, [
-    {description, "An Erlang Syntactic Sugar Library"},
-    {vsn, "1"},
-    {modules, [esugar_pipe_transform]},
-    {registered, []},
-    {applications, [kernel, stdlib]},
-    {env, []}
+      {description, "An Erlang Syntactic Sugar Library"}
+    , {vsn, "1.0.0"}
+    , {modules, [esugar_bind_transform, esugar_do_transform
+                ,esugar_error_m, esugar_error_t, esugar_identity_m
+                ,esugar_import_as_transform, esugar_list_m
+                ,esugar_maybe_m, esugar_monad, esugar_monad_plus
+                ,esugar_monad_trans, esugar_omega_m
+                ,esugar_pipe_transform, esugar_state_t, esugar_util]}
+    , {registered, []}
+    , {applications, [kernel, stdlib]}
+    , {env, []}
 ]}.
 
