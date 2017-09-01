@@ -5,7 +5,7 @@
 -export([guard/2, msum/2, mfilter/3]).
 
 
--type monad_plus() :: module().
+-type monad_plus() :: module() | {module(), monad_plus()}.
 -type monad_plus(_M, _A) :: any().
 
 

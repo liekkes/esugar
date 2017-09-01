@@ -3,7 +3,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 
-esugar_pipe_transform_test_() ->
+esugar_do_transform_test_() ->
     {foreach,
         fun() -> error_logger:tty(false) end,
         fun(_) -> error_logger:tty(true) end,
@@ -26,25 +26,25 @@ esugar_pipe_transform_test_() ->
 
 test_sequence() ->
     List = lists:seq(1, 5),
-    ListM = [do([esugar_maybe_m || return(N)]) || N <- List],
-    {just, List} = esugar_monad:sequence(esugar_maybe_m, ListM).
+    ListM = [do([esugar_maybe || return(N)]) || N <- List],
+    {just, List} = esugar_monad:sequence(esugar_maybe, ListM).
 
 
 test_join() ->
-    {just, 5} = esugar_monad:join(esugar_maybe_m,
-                           esugar_maybe_m:return(esugar_maybe_m:return(5))),
-    {just, 5} = esugar_monad:join(esugar_maybe_m,
-                           do([esugar_maybe_m || return(esugar_maybe_m:return(5))])),
-    {just, 5} = esugar_monad:join(esugar_maybe_m,
-                           do([esugar_maybe_m || return(do([esugar_maybe_m || return(5)]))])).
+    {just, 5} = esugar_monad:join(esugar_maybe,
+                           esugar_maybe:return(esugar_maybe:return(5))),
+    {just, 5} = esugar_monad:join(esugar_maybe,
+                           do([esugar_maybe || return(esugar_maybe:return(5))])),
+    {just, 5} = esugar_monad:join(esugar_maybe,
+                           do([esugar_maybe || return(do([esugar_maybe || return(5)]))])).
 
 test_maybe() ->
     nothing = maybe(atom),
     {just, 9} = maybe(3).
 
 maybe(Arg) ->
-    do([esugar_maybe_m
-        || esugar_monad_plus:guard(esugar_maybe_m, is_number(Arg)),
+    do([esugar_maybe
+        || esugar_monad_plus:guard(esugar_maybe, is_number(Arg)),
            return(Arg*Arg)]).
 
 test_fib() ->
@@ -70,7 +70,7 @@ test_list() ->
     %% Demonstrate equivalence of list comprehensions and list monad
     A = [{X,Y} || X <- "abcd",
                   Y <- [1,2]],
-    A = do([esugar_list_m || X <- "abcd",
+    A = do([esugar_list || X <- "abcd",
                       Y <- [1,2],
                       return({X,Y})]),
     %% Classic pythagorean triples
@@ -78,11 +78,11 @@ test_list() ->
                       X <- lists:seq(1,Z),
                       Y <- lists:seq(X,Z),
                       math:pow(X,2) + math:pow(Y,2) == math:pow(Z,2)],
-    P = do([esugar_list_m || Z <- lists:seq(1,20),
+    P = do([esugar_list || Z <- lists:seq(1,20),
                       X <- lists:seq(1,Z),
                       Y <- lists:seq(X,Z),
                       esugar_monad_plus:guard(
-                        esugar_list_m, math:pow(X,2) + math:pow(Y,2) == math:pow(Z,2)),
+                        esugar_list, math:pow(X,2) + math:pow(Y,2) == math:pow(Z,2)),
                       return({X,Y,Z})]).
 
 test_omega() ->
@@ -97,7 +97,7 @@ test_omega() ->
     true = A =:= lists:usort(B).
 
 test_error_t_list() ->
-    M = esugar_error_t:new(esugar_list_m),
+    M = esugar_error_t:new(esugar_list),
     R = M:run(do([M || E1 <- M:lift([1, 2, 3]),
                        E2 <- M:lift([4, 5, 6]),
                        case (E1 * E2) rem 2 of
@@ -109,7 +109,7 @@ test_error_t_list() ->
          {ok, {3, 4}}, {error, not_even_product}, {ok, {3, 6}}],
 
     %% Compare with the non-error_t version, which will remove failures:
-    S = do([esugar_list_m || E1 <- [1, 2, 3],
+    S = do([esugar_list || E1 <- [1, 2, 3],
                       E2 <- [4, 5, 6],
                       case (E1 * E2) rem 2 of
                           0 -> return({E1, E2});
@@ -121,75 +121,75 @@ test_error_t_list() ->
 %% expression) But instead of 'let' here we use 'match' (=) expression
 %% in 'do([])':
 test_let_match() ->
-    T1 = do([esugar_maybe_m || R <- return(2),
+    T1 = do([esugar_maybe || R <- return(2),
                         R2 = R*R,
                         return(R2*R2)]),
-    T1 = do([esugar_maybe_m || R <- return(2),
+    T1 = do([esugar_maybe || R <- return(2),
                         return(R*R*R*R)]),
     %% Failure test
-    T2 = do([esugar_error_m || A <- return(42),
+    T2 = do([esugar_error || A <- return(42),
                         {B,C} <- fail(test),
                         BC = B*C,
                         return(BC+A)]),
-    T2 = do([esugar_error_m || A <- return(42),
+    T2 = do([esugar_error || A <- return(42),
                         {B,C} <- fail(test),
                         return(B*C+A)]),
 
     Fun = fun({X,Y}) -> {Y,X} end, %% Mysterious function
-    T3 = do([esugar_error_m || R <- return({1,42}),
+    T3 = do([esugar_error || R <- return({1,42}),
                         {R1,R2} = Fun(R),
                         return(R1+R2)]),
-    T3 = do([esugar_error_m || R <- return({1,42}),
+    T3 = do([esugar_error || R <- return({1,42}),
                         %% No better way without 'let'?
                         %% Well, only via extra 'return'
                         return(element(1,Fun(R)) + element(2,Fun(R)))]),
 
     DivRem = fun(N,M) -> {N div M,N rem M} end,
-    T4 = do([esugar_error_m || {N,M} <- return({42,3}),
+    T4 = do([esugar_error || {N,M} <- return({42,3}),
                         {D,R} = DivRem(N,M),
                         E <- T3,
                         S = D+R+E,
                         return({D,R,S})]),
-    T4 = do([esugar_error_m || {N,M} <- return({42,3}),
+    T4 = do([esugar_error || {N,M} <- return({42,3}),
                         %% Can hack it with extra 'return' (and '>>='
                         %% as result)
                         {D,R} <- return(DivRem(N,M)),
                         E <- T3,
                         return({D,R,D+R+E})]),
 
-    T5 = do([esugar_list_m || X <- [1,2,3],
+    T5 = do([esugar_list || X <- [1,2,3],
                        X2 = X*X,
                        Y <- lists:seq(1,X2),
                        Y2 = {Y,X2},
                        Z = Y + X2,
                        return({X2,Y,Y2,Z})]),
-    T5 = do([esugar_list_m || X <- [1,2,3],
+    T5 = do([esugar_list || X <- [1,2,3],
                        Y <- lists:seq(1,X*X),
                        return({X*X,Y,{Y,X*X},Y+X*X})]).
 
 test_let_first() ->
-    M = do([esugar_list_m || A = 3,
+    M = do([esugar_list || A = 3,
                       X <- [1,2,A],
                       Y <- [A,A+1],
                       return({X,Y})]),
     M = fun() ->
                 A = 3,
-                do([esugar_list_m || X <- [1,2,A],
+                do([esugar_list || X <- [1,2,A],
                               Y <- [A,A+1],
                               return({X,Y})])
         end().
 
 test_let_escapes() ->
-    M1 = do([esugar_maybe_m || A = 5,
+    M1 = do([esugar_maybe || A = 5,
                         return(A)]),
-    M2 = do([esugar_maybe_m || A = 6,
+    M2 = do([esugar_maybe || A = 6,
                         return(A)]),
-    M1 = do([esugar_maybe_m || return(5)]),
-    M2 = do([esugar_maybe_m || return(6)]),
+    M1 = do([esugar_maybe || return(5)]),
+    M2 = do([esugar_maybe || return(6)]),
 
     %% Demonstrate that bindings do not escape.
-    M3 = do([esugar_maybe_m || return(_A = 5)]),
-    M3 = do([esugar_maybe_m || return((_A = 7) - 2)]),
+    M3 = do([esugar_maybe || return(_A = 5)]),
+    M3 = do([esugar_maybe || return((_A = 7) - 2)]),
     _A = 6.
 
 test_named_fun() ->
@@ -201,7 +201,7 @@ test_named_fun() ->
     true = Fib(10) =:= 55.
 
 test_maps() ->
-    M1 = do([esugar_maybe_m || A = #{ a => b },
+    M1 = do([esugar_maybe || A = #{ a => b },
                         X <- return(A),
                         Y <- return(X#{ a := c, b => d }),
                         return(Y)

@@ -1,4 +1,4 @@
--module(esugar_error_m).
+-module(esugar_error).
 -behaviour(esugar_monad).
 -export(['>>='/2, return/1, fail/1]).
 

@@ -1,4 +1,4 @@
--module(esugar_maybe_m).
+-module(esugar_maybe).
 -behaviour(esugar_monad).
 -export(['>>='/2, return/1, fail/1]).
 -behaviour(esugar_monad_plus).

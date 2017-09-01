@@ -3,7 +3,7 @@
 -export_type([applicative/0, applicative/2]).
 
 
--type applicative() :: module().
+-type applicative() :: module() | {module(), applicative()}.
 -type applicative(_M, _A) :: any().
 
 
