@@ -22,16 +22,16 @@ error_monad() ->
 
 safe_muldiv(First, Second) ->
     do@([esugar_do_transform_error ||
-        _ <- case is_integer(First) of
+        case is_integer(First) of
         true -> return(next);
         false -> fail("First must be an integer!")
         end,
-        _ <- case is_integer(Second) of
+        case is_integer(Second) of
         true -> return(next);
         false -> fail("Second must be an integer!")
         end,
         Product = First * Second,
-        _ <- case Second =/= 0 of
+        case Second =/= 0 of
         true -> return(next);
         false -> fail("Second must not be zero!")
         end,
